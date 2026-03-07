@@ -1,9 +1,10 @@
 import litellm
 import logging
+from datetime import datetime, timezone
 from typing import AsyncGenerator
 
 import mlflow
-from agents import Agent, Runner, set_default_openai_api, set_default_openai_client
+from agents import Agent, Runner, function_tool, set_default_openai_api, set_default_openai_client
 from agents.tracing import set_trace_processors
 from databricks_openai import AsyncDatabricksOpenAI
 from mlflow.genai.agent_server import invoke, stream
@@ -52,11 +53,34 @@ Always be professional, patient, and solution-oriented. If you don't know someth
 """
 
 
+@function_tool
+def get_current_date_and_time() -> str:
+    """Returns the current date and time in UTC. Use this when a customer asks about
+    time-sensitive matters such as return windows, order cutoffs, or business hours."""
+    return datetime.now(timezone.utc).strftime("%A, %B %d, %Y at %H:%M UTC")
+
+
+@function_tool
+def check_return_eligibility(days_since_purchase: int) -> str:
+    """Checks whether a purchase is eligible for return based on the number of days
+    since purchase. Acme Corp has a 30-day return policy.
+
+    Args:
+        days_since_purchase: Number of days since the customer made the purchase.
+    """
+    if days_since_purchase <= 30:
+        remaining = 30 - days_since_purchase
+        return f"Eligible for return. Customer has {remaining} day(s) remaining in their return window."
+    else:
+        return f"Not eligible for return. The 30-day return window has passed ({days_since_purchase} days since purchase)."
+
+
 def create_customer_support_agent() -> Agent:
     return Agent(
         name="Customer Support Agent",
         instructions=CUSTOMER_SUPPORT_INSTRUCTIONS,
-        model="databricks-claude-sonnet-4-5",
+        model="databricks-gpt-5-2",
+        tools=[get_current_date_and_time, check_return_eligibility],
     )
 
 
