@@ -19,6 +19,11 @@ resources:
           experiment:
             experiment_id: "${resources.experiments.agent_customer_support_experiment.id}"
             permission: 'CAN_MANAGE'
+        - name: 'openai-api-key'
+          secret:
+            scope: 'smurching'
+            key: 'openai-api-key'
+            permission: 'READ'
 
 targets:
   dev:
