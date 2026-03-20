@@ -152,7 +152,10 @@
     async function connect() {
       setStatus('Requesting microphone access...');
       try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      });
       } catch (e) {
         setStatus('Microphone access denied: ' + e.message);
         return;
@@ -200,8 +203,13 @@
         const b64 = float32ToBase64Pcm16(samples);
         ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: b64 }));
       };
+      // Route through a silent gain node — keeps ScriptProcessor alive without
+      // echoing mic audio to the speakers (which would cause language confusion).
+      const silentOut = audioContext.createGain();
+      silentOut.gain.value = 0;
       source.connect(scriptProcessor);
-      scriptProcessor.connect(audioContext.destination);
+      scriptProcessor.connect(silentOut);
+      silentOut.connect(audioContext.destination);
     }
 
     function handleServerEvent(event) {
