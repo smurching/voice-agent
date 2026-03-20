@@ -89,7 +89,7 @@ async def voice_websocket(websocket: WebSocket):
 
     client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
-    async with client.beta.realtime.connect(model="gpt-4o-realtime-preview") as openai_ws:
+    async with client.beta.realtime.connect(model="gpt-realtime") as openai_ws:
         await openai_ws.session.update(
             session=Session(
                 instructions=CUSTOMER_SUPPORT_INSTRUCTIONS,
