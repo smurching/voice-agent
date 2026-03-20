@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebRTC Connectivity Test</title>
+  <style>
+    body { font-family: monospace; max-width: 700px; margin: 40px auto; padding: 0 20px; background: #0f0f0f; color: #e0e0e0; }
+    h1 { color: #fff; font-size: 1.2em; }
+    #ice-state { font-size: 2em; font-weight: bold; padding: 12px 20px; border-radius: 6px; display: inline-block; margin: 12px 0; background: #222; }
+    #ice-state.connected { background: #1a4d1a; color: #4caf50; }
+    #ice-state.failed { background: #4d1a1a; color: #f44336; }
+    #ice-state.checking { background: #4d3d00; color: #ffc107; }
+    #log { background: #1a1a1a; border: 1px solid #333; border-radius: 4px; padding: 12px; height: 300px; overflow-y: auto; font-size: 0.85em; white-space: pre-wrap; }
+    .ok { color: #4caf50; }
+    .fail { color: #f44336; }
+    .info { color: #90caf9; }
+    button { margin: 4px; padding: 8px 18px; font-size: 0.95em; border: none; border-radius: 4px; cursor: pointer; }
+    #btn-connect { background: #1565c0; color: #fff; }
+    #btn-disconnect { background: #b71c1c; color: #fff; display: none; }
+    audio { display: none; }
+  </style>
+</head>
+<body>
+  <h1>WebRTC Networking Test — Databricks Apps</h1>
+  <div>
+    <span>ICE state: </span><span id="ice-state">—</span>
+  </div>
+  <div style="margin: 10px 0;">
+    <button id="btn-connect">Connect</button>
+    <button id="btn-disconnect">Disconnect</button>
+  </div>
+  <div id="log"></div>
+  <audio id="audio" autoplay></audio>
+
+  <script>
+    const logEl = document.getElementById('log');
+    const iceEl = document.getElementById('ice-state');
+    const btnConnect = document.getElementById('btn-connect');
+    const btnDisconnect = document.getElementById('btn-disconnect');
+    const audioEl = document.getElementById('audio');
+
+    let pc = null;
+    let micStream = null;
+
+    function log(msg, type = 'info') {
+      const ts = new Date().toISOString().slice(11, 23);
+      const span = document.createElement('span');
+      span.className = type;
+      span.textContent = `[${ts}] ${msg}\n`;
+      logEl.appendChild(span);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setIceState(state) {
+      iceEl.textContent = state;
+      iceEl.className = '';
+      if (state === 'connected' || state === 'completed') iceEl.classList.add('connected');
+      else if (state === 'failed' || state === 'disconnected' || state === 'closed') iceEl.classList.add('failed');
+      else if (state === 'checking') iceEl.classList.add('checking');
+    }
+
+    async function connect() {
+      btnConnect.disabled = true;
+      log('── Starting WebRTC connectivity test ──');
+
+      // Step 1: Fetch ephemeral token
+      let ephemeralKey;
+      try {
+        log('1. Fetching ephemeral token from /api/rtc-session …');
+        const res = await fetch('/api/rtc-session', { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+        const data = await res.json();
+        ephemeralKey = data.client_secret?.value;
+        if (!ephemeralKey) throw new Error('No client_secret.value in response');
+        log('   ✓ Token received (expires_at: ' + (data.expires_at ?? 'n/a') + ')', 'ok');
+      } catch (e) {
+        log('   ✗ Token fetch failed: ' + e.message, 'fail');
+        btnConnect.disabled = false;
+        return;
+      }
+
+      // Step 2: Microphone
+      try {
+        log('2. Requesting microphone …');
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        log('   ✓ Microphone granted', 'ok');
+      } catch (e) {
+        log('   ✗ Microphone denied: ' + e.message, 'fail');
+        btnConnect.disabled = false;
+        return;
+      }
+
+      // Step 3: Create PeerConnection
+      log('3. Creating RTCPeerConnection …');
+      pc = new RTCPeerConnection();
+
+      pc.oniceconnectionstatechange = () => {
+        const s = pc.iceConnectionState;
+        setIceState(s);
+        const type = (s === 'connected' || s === 'completed') ? 'ok' : (s === 'failed' ? 'fail' : 'info');
+        log('   ICE connection state → ' + s, type);
+      };
+
+      pc.onicegatheringstatechange = () => {
+        log('   ICE gathering state → ' + pc.iceGatheringState);
+      };
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) log('   ICE candidate: ' + e.candidate.candidate.split(' ').slice(0, 5).join(' ') + ' …');
+        else log('   ICE gathering complete');
+      };
+
+      pc.ontrack = (e) => {
+        log('   ✓ Remote audio track received', 'ok');
+        audioEl.srcObject = e.streams[0];
+      };
+
+      // Add mic track
+      pc.addTrack(micStream.getTracks()[0], micStream);
+      log('   ✓ PeerConnection created, mic track added', 'ok');
+
+      // Step 4: SDP offer
+      try {
+        log('4. Creating SDP offer …');
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        log('   ✓ Local description set', 'ok');
+
+        log('5. Sending SDP offer to OpenAI Realtime API …');
+        const sdpRes = await fetch('https://api.openai.com/v1/realtime?model=gpt-realtime', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${ephemeralKey}`,
+            'Content-Type': 'application/sdp',
+          },
+          body: offer.sdp,
+        });
+        if (!sdpRes.ok) throw new Error(`HTTP ${sdpRes.status}: ${await sdpRes.text()}`);
+        const answerSdp = await sdpRes.text();
+        log('   ✓ SDP answer received from OpenAI', 'ok');
+
+        await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+        log('   ✓ Remote description set — ICE negotiation in progress …', 'ok');
+        setIceState('checking');
+      } catch (e) {
+        log('   ✗ SDP exchange failed: ' + e.message, 'fail');
+        disconnect();
+        return;
+      }
+
+      btnDisconnect.style.display = '';
+    }
+
+    function disconnect() {
+      if (pc) { pc.close(); pc = null; }
+      if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+      audioEl.srcObject = null;
+      setIceState('closed');
+      log('── Disconnected ──');
+      btnConnect.disabled = false;
+      btnDisconnect.style.display = 'none';
+    }
+
+    btnConnect.addEventListener('click', connect);
+    btnDisconnect.addEventListener('click', disconnect);
+  </script>
+</body>
+</html>

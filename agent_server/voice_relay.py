@@ -16,8 +16,9 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from openai import AsyncOpenAI
 from openai.types.beta.realtime import ResponseOutputItemDoneEvent
 from openai.types.beta.realtime.session_update_event_param import Session, SessionTool
@@ -81,6 +82,26 @@ def _execute_tool(name: str, arguments: dict) -> str:
 @router.get("/voice")
 async def voice_ui():
     return FileResponse(TEMPLATES_DIR / "voice.html")
+
+
+@router.get("/webrtc-test")
+async def webrtc_test_ui():
+    return FileResponse(TEMPLATES_DIR / "webrtc_test.html")
+
+
+@router.post("/api/rtc-session")
+async def create_rtc_session():
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://api.openai.com/v1/realtime/sessions",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                "Content-Type": "application/json",
+            },
+            json={"model": "gpt-realtime", "voice": "alloy"},
+        )
+        resp.raise_for_status()
+        return JSONResponse(content=resp.json())
 
 
 @router.websocket("/ws/voice")
